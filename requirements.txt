@@ -1,1 +1,6 @@
-
+pandas>=1.5
+numpy>=1.24
+statsmodels>=0.14
+streamlit>=1.28
+yfinance>=0.2
+arch>=6.2
