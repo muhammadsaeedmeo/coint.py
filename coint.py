@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import statsmodels.api as sm
 from arch.bootstrap import CircularBlockBootstrap
+from statsmodels.stats.sandwich_covariance import cov_nw   # fixed import
 
 st.set_page_config(page_title="Panel MQCS test", layout="wide")
 st.title("📊 Panel-data MQCS(τ) quantile-cointegration test")
@@ -39,7 +40,7 @@ else:
 
 panel = wide[[y_col] + x_cols].dropna()
 panel = np.log(panel).apply(lambda x: (x - x.mean())/x.std())
-panel = panel.reset_index()                               # flatten MultiIndex
+panel = panel.reset_index()
 chart_ready = panel.select_dtypes(include=np.number)      # numeric only for chart
 st.write("### 2. Normalised (log, z-score) series")
 st.line_chart(chart_ready)
@@ -54,7 +55,7 @@ def _mqcs(y, x, tau, h=None, B=500, block_size=None, seed=42):
     beta = mod.fit(q=tau).params
     u = y - X @ beta
     psi = tau - (u < 0)
-    lrv = sm.stats.sandwich_covariance.cov_nw(psi, h)
+    lrv = cov_nw(psi, h)                                      # fixed call
     S = np.cumsum(psi)/np.sqrt(n)/np.sqrt(lrv)
     stat = np.max(np.abs(S))
     rng = np.random.default_rng(seed)
@@ -65,7 +66,7 @@ def _mqcs(y, x, tau, h=None, B=500, block_size=None, seed=42):
         bmod = sm.QuantReg(by, bX).fit(q=tau)
         bu = by - bX @ bmod.params
         bpsi = tau - (bu < 0)
-        blrv = sm.stats.sandwich_covariance.cov_nw(bpsi, h)
+        blrv = cov_nw(bpsi, h)                                # fixed call
         bS = np.cumsum(bpsi)/np.sqrt(len(bpsi))/np.sqrt(blrv)
         bs_stats.append(np.max(np.abs(bS)))
     pval = 1 - np.mean(np.array(bs_stats) <= stat)
