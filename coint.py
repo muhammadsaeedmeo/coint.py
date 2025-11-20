@@ -8,7 +8,6 @@ import pandas as pd
 import numpy as np
 import statsmodels.api as sm
 from arch.bootstrap import CircularBlockBootstrap
-from statsmodels.stats.sandwich_covariance import cov_nw   # fixed import
 
 st.set_page_config(page_title="Panel MQCS test", layout="wide")
 st.title("📊 Panel-data MQCS(τ) quantile-cointegration test")
@@ -55,7 +54,7 @@ def _mqcs(y, x, tau, h=None, B=500, block_size=None, seed=42):
     beta = mod.fit(q=tau).params
     u = y - X @ beta
     psi = tau - (u < 0)
-    lrv = cov_nw(psi, h)                                      # fixed call
+    lrv = sm.stats.cov_nw(psi, h)                           # official API
     S = np.cumsum(psi)/np.sqrt(n)/np.sqrt(lrv)
     stat = np.max(np.abs(S))
     rng = np.random.default_rng(seed)
@@ -66,7 +65,7 @@ def _mqcs(y, x, tau, h=None, B=500, block_size=None, seed=42):
         bmod = sm.QuantReg(by, bX).fit(q=tau)
         bu = by - bX @ bmod.params
         bpsi = tau - (bu < 0)
-        blrv = cov_nw(bpsi, h)                                # fixed call
+        blrv = sm.stats.cov_nw(bpsi, h)                     # official API
         bS = np.cumsum(bpsi)/np.sqrt(len(bpsi))/np.sqrt(blrv)
         bs_stats.append(np.max(np.abs(bS)))
     pval = 1 - np.mean(np.array(bs_stats) <= stat)
