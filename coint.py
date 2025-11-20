@@ -40,7 +40,7 @@ else:
 panel = wide[[y_col] + x_cols].dropna()
 panel = np.log(panel).apply(lambda x: (x - x.mean())/x.std())
 panel = panel.reset_index()
-chart_ready = panel.select_dtypes(include=np.number)      # numeric only for chart
+chart_ready = panel.select_dtypes(include=np.number)
 st.write("### 2. Normalised (log, z-score) series")
 st.line_chart(chart_ready)
 
@@ -54,7 +54,9 @@ def _mqcs(y, x, tau, h=None, B=500, block_size=None, seed=42):
     beta = mod.fit(q=tau).params
     u = y - X @ beta
     psi = tau - (u < 0)
-    lrv = sm.stats.cov_nw(psi, h)                           # official API
+    # ---- Newey-West long-run variance (safe for all statsmodels) ----
+    gamma = sm.tsa.stattools.acf(psi, nlags=h, fft=False)
+    lrv   = gamma[0] + 2 * gamma[1:].sum()
     S = np.cumsum(psi)/np.sqrt(n)/np.sqrt(lrv)
     stat = np.max(np.abs(S))
     rng = np.random.default_rng(seed)
@@ -65,7 +67,8 @@ def _mqcs(y, x, tau, h=None, B=500, block_size=None, seed=42):
         bmod = sm.QuantReg(by, bX).fit(q=tau)
         bu = by - bX @ bmod.params
         bpsi = tau - (bu < 0)
-        blrv = sm.stats.cov_nw(bpsi, h)                     # official API
+        bgamma = sm.tsa.stattools.acf(bpsi, nlags=h, fft=False)
+        blrv   = bgamma[0] + 2 * bgamma[1:].sum()
         bS = np.cumsum(bpsi)/np.sqrt(len(bpsi))/np.sqrt(blrv)
         bs_stats.append(np.max(np.abs(bS)))
     pval = 1 - np.mean(np.array(bs_stats) <= stat)
