@@ -40,8 +40,9 @@ else:
 panel = wide[[y_col] + x_cols].dropna()
 panel = np.log(panel).apply(lambda x: (x - x.mean())/x.std())
 panel = panel.reset_index()                               # flatten MultiIndex
+chart_ready = panel.select_dtypes(include=np.number)      # numeric only for chart
 st.write("### 2. Normalised (log, z-score) series")
-st.line_chart(panel)                                      # safe for any shape
+st.line_chart(chart_ready)
 
 # ----------  core functions  -------------------------------------------------
 def _mqcs(y, x, tau, h=None, B=500, block_size=None, seed=42):
