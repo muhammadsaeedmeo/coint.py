@@ -30,8 +30,8 @@ st.dataframe(df_raw.head())
 id_col   = st.selectbox("Select panel-ID column", ["index"] + list(df_raw.columns))
 date_col = st.selectbox("Select date column (optional)", ["none"] + list(df_raw.columns))
 y_col    = st.selectbox("Dependent variable (y)", df_raw.columns)
-x_cols   = st.multiselect("Independent variables (x)", df_raw.columns, default=[c for c in df_raw.columns if c not in {y_col, id_col, date_col}])
-
+x_cols   = st.multiselect("Independent variables (x)", df_raw.columns,
+                            default=[c for c in df_raw.columns if c not in {y_col, id_col, date_col}])
 if not x_cols:
     st.warning("Choose at least one x variable."); st.stop()
 
@@ -39,14 +39,16 @@ if not x_cols:
 if id_col == "index":
     wide = df_raw
 else:
-    wide = df_raw.set_index([id_col] if date_col=="none" else [id_col, date_col])
+    idx = [id_col] if date_col=="none" else [id_col, date_col]
+    wide = df_raw.set_index(idx)
 
 panel = wide[[y_col] + x_cols].dropna()
 panel = np.log(panel).apply(lambda x: (x - x.mean())/x.std())  # z-score
+panel = panel.reset_index()                                    # flatten MultiIndex → simple columns
 st.write("### 2. Normalised (log, z-score) series")
-st.line_chart(panel)
+st.line_chart(panel.set_index(panel.columns[0]) if panel.columns[0] != id_col else panel.set_index(panel.columns[:2]))
 
-# ----------  CORE FUNCTIONS  -------------------------------------------------
+# ----------  CORE FUNCTIONS  -----------------------------------------------
 def _mqcs(y, x, tau, h=None, B=500, block_size=None, seed=42):
     n = len(y)
     h = int(n**(1/5)) if h is None else h
@@ -85,7 +87,7 @@ def _eg_ols(y, x):
 taus = [0.1, 0.3, 0.5, 0.7, 0.9]
 results = []
 
-for entity, sub in panel.groupby(level=0 if id_col != "index" else panel.index):
+for entity, sub in panel.groupby(id_col if id_col != "index" else panel.columns[0]):
     y = sub[y_col].values
     x = sub[x_cols].values          # allows many x; here we use only the 1st for MQCS
     x1 = x[:,0]                     # first x for MQCS
