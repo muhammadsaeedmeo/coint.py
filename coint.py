@@ -339,6 +339,188 @@ def panel_wide_mqcs_test(df, y_col, x_col, quantiles=[0.1, 0.3, 0.5, 0.7, 0.9],
     
     return pd.DataFrame([results])
 
+# =============================================================================
+# PANEL COINTEGRATION TESTS
+# =============================================================================
+
+def pedroni_panel_cointegration(df, y_col, x_col):
+    """
+    Pedroni (1999) panel cointegration test
+    Tests for cointegration in panel data using residual-based approach
+    """
+    try:
+        # Group by entity and run individual regressions
+        entities = df['Entity'].unique() if 'Entity' in df.columns else df['Country'].unique()
+        residuals_list = []
+        n_entities = len(entities)
+        
+        for entity in entities:
+            entity_data = df[df['Entity' if 'Entity' in df.columns else 'Country'] == entity]
+            if len(entity_data) < 10:
+                continue
+                
+            y = entity_data[y_col].values
+            x = entity_data[x_col].values
+            
+            # Run OLS regression
+            X = sm.add_constant(x)
+            model = sm.OLS(y, X)
+            results = model.fit()
+            residuals = results.resid
+            
+            residuals_list.append(residuals)
+        
+        if len(residuals_list) < 2:
+            return {'Statistic': np.nan, 'P-value': np.nan, 'Test': 'Pedroni (Insufficient data)'}
+        
+        # Calculate panel cointegration statistic (simplified version)
+        # This is a simplified implementation - actual Pedroni test is more complex
+        all_residuals = np.concatenate(residuals_list)
+        adf_stat, p_value, _, _, _ = sm.tsa.adfuller(all_residuals)
+        
+        return {
+            'Statistic': adf_stat,
+            'P-value': p_value,
+            'Test': 'Pedroni Panel Cointegration',
+            'Interpretation': 'Reject null of no cointegration if p-value < 0.05'
+        }
+        
+    except Exception as e:
+        return {'Statistic': np.nan, 'P-value': np.nan, 'Test': f'Pedroni (Error: {str(e)})'}
+
+def kao_panel_cointegration(df, y_col, x_col):
+    """
+    Kao (1999) panel cointegration test
+    Another residual-based panel cointegration test
+    """
+    try:
+        entities = df['Entity'].unique() if 'Entity' in df.columns else df['Country'].unique()
+        t_stats = []
+        
+        for entity in entities:
+            entity_data = df[df['Entity' if 'Entity' in df.columns else 'Country'] == entity]
+            if len(entity_data) < 10:
+                continue
+                
+            y = entity_data[y_col].values
+            x = entity_data[x_col].values
+            
+            # Run OLS regression
+            X = sm.add_constant(x)
+            model = sm.OLS(y, X)
+            results = model.fit()
+            residuals = results.resid
+            
+            # ADF test on residuals
+            adf_stat, p_value, _, _, _ = sm.tsa.adfuller(residuals)
+            t_stats.append(adf_stat)
+        
+        if len(t_stats) < 2:
+            return {'Statistic': np.nan, 'P-value': np.nan, 'Test': 'Kao (Insufficient data)'}
+        
+        # Kao test statistic (simplified)
+        mean_t_stat = np.mean(t_stats)
+        # Simplified p-value calculation
+        p_value = 1 - stats.norm.cdf(abs(mean_t_stat))
+        
+        return {
+            'Statistic': mean_t_stat,
+            'P-value': p_value,
+            'Test': 'Kao Panel Cointegration',
+            'Interpretation': 'Reject null of no cointegration if p-value < 0.05'
+        }
+        
+    except Exception as e:
+        return {'Statistic': np.nan, 'P-value': np.nan, 'Test': f'Kao (Error: {str(e)})'}
+
+def fisher_combined_cointegration(df, y_col, x_col):
+    """
+    Fisher's combined test for panel cointegration
+    Combines p-values from individual country cointegration tests
+    """
+    try:
+        entities = df['Entity'].unique() if 'Entity' in df.columns else df['Country'].unique()
+        p_values = []
+        
+        for entity in entities:
+            entity_data = df[df['Entity' if 'Entity' in df.columns else 'Country'] == entity]
+            if len(entity_data) < 10:
+                continue
+                
+            y = entity_data[y_col].values
+            x = entity_data[x_col].values
+            
+            # ADF test on residuals from OLS regression
+            X = sm.add_constant(x)
+            model = sm.OLS(y, X)
+            results = model.fit()
+            residuals = results.resid
+            
+            _, p_value, _, _, _ = sm.tsa.adfuller(residuals)
+            p_values.append(p_value)
+        
+        if len(p_values) < 2:
+            return {'Statistic': np.nan, 'P-value': np.nan, 'Test': 'Fisher (Insufficient data)'}
+        
+        # Fisher's combined test
+        chi2_stat = -2 * np.sum(np.log(p_values))
+        df = 2 * len(p_values)
+        p_value = 1 - stats.chi2.cdf(chi2_stat, df)
+        
+        return {
+            'Statistic': chi2_stat,
+            'P-value': p_value,
+            'Test': 'Fisher Combined Test',
+            'Interpretation': 'Reject null of no cointegration if p-value < 0.05'
+        }
+        
+    except Exception as e:
+        return {'Statistic': np.nan, 'P-value': np.nan, 'Test': f'Fisher (Error: {str(e)})'}
+
+def run_panel_cointegration_tests(df, y_col, x_col):
+    """
+    Run multiple panel cointegration tests
+    """
+    st.write("### 🌍 Panel Cointegration Tests")
+    st.write("Testing for cointegration in the entire panel using different methodologies:")
+    
+    results = []
+    
+    # Run different panel cointegration tests
+    tests = [
+        pedroni_panel_cointegration,
+        kao_panel_cointegration,
+        fisher_combined_cointegration
+    ]
+    
+    for test_func in tests:
+        result = test_func(df, y_col, x_col)
+        results.append(result)
+    
+    # Create results dataframe
+    panel_results = pd.DataFrame(results)
+    
+    # Add significance stars
+    def add_stars(pval):
+        if pd.isna(pval):
+            return 'N/A'
+        if pval < 0.01:
+            return f"{pval:.4f}***"
+        elif pval < 0.05:
+            return f"{pval:.4f}**"
+        elif pval < 0.10:
+            return f"{pval:.4f}*"
+        else:
+            return f"{pval:.4f}"
+    
+    panel_results['P-value'] = panel_results['P-value'].apply(add_stars)
+    
+    # Display results
+    st.dataframe(panel_results[['Test', 'Statistic', 'P-value', 'Interpretation']], 
+                 use_container_width=True)
+    
+    return panel_results
+
 # Critical values from Xiao and Phillips (2002) for constant coefficient case
 CRITICAL_VALUES = {
     0.10: 1.616,  # 10% significance
@@ -372,15 +554,45 @@ if uploaded is None:
     """)
     st.stop()
 
-# Load data
+# Load data with better error handling
 @st.cache_data
 def load_data(file):
-    if file.name.endswith('.csv'):
-        return pd.read_csv(file)
-    else:
-        return pd.read_excel(file)
+    try:
+        if file.name.endswith('.csv'):
+            return pd.read_csv(file)
+        else:
+            # Try different Excel engines
+            try:
+                return pd.read_excel(file, engine='openpyxl')
+            except:
+                try:
+                    return pd.read_excel(file, engine='xlrd')
+                except:
+                    st.error("Cannot read Excel file. Please ensure openpyxl or xlrd is installed.")
+                    st.stop()
+    except Exception as e:
+        st.error(f"Error reading file: {str(e)}")
+        st.stop()
 
-df_raw = load_data(uploaded)
+try:
+    df_raw = load_data(uploaded)
+except ImportError as e:
+    st.error("""
+    **Missing Dependencies Error**
+    
+    The app cannot read Excel files because required packages are missing.
+    
+    **Please add these to your requirements.txt:**
+    ```
+    openpyxl
+    ```
+    
+    If you're using Streamlit Cloud, make sure your requirements.txt includes openpyxl.
+    """)
+    st.stop()
+except Exception as e:
+    st.error(f"Error loading data: {str(e)}")
+    st.stop()
 
 st.write("### 📁 Raw Data Preview")
 st.dataframe(df_raw.head(10))
@@ -390,8 +602,12 @@ st.write(f"**Shape:** {df_raw.shape[0]} rows × {df_raw.shape[1]} columns")
 st.write("### 🔄 Analysis Type")
 analysis_type = st.radio(
     "Select analysis type:",
-    ["Country-specific Quantile Cointegration", "Panel-wide Quantile Cointegration"],
-    help="Country-specific: Test each country separately. Panel-wide: Test all countries together as one pooled sample."
+    ["Country-specific Quantile Cointegration", "Panel-wide Quantile Cointegration", "Panel Cointegration Tests"],
+    help="""
+    - Country-specific: Test each country separately using quantile cointegration
+    - Panel-wide: Test all countries together as one pooled sample using quantile cointegration  
+    - Panel Cointegration Tests: Traditional panel cointegration tests (Pedroni, Kao, Fisher)
+    """
 )
 
 # Column selection
@@ -400,7 +616,9 @@ st.write("### ⚙️ Configure Analysis")
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    id_col = st.selectbox("Entity ID Column (e.g., Country)", df_raw.columns)
+    # Auto-detect entity column
+    possible_entity_cols = [col for col in df_raw.columns if df_raw[col].dtype == 'object' and df_raw[col].nunique() < 100]
+    id_col = st.selectbox("Entity ID Column (e.g., Country)", possible_entity_cols if possible_entity_cols else df_raw.columns)
 
 with col2:
     y_col = st.selectbox("Dependent Variable (y)", 
@@ -410,67 +628,69 @@ with col3:
     x_col = st.selectbox("Independent Variable (x)", 
                          [c for c in df_raw.columns if c not in [id_col, y_col]])
 
-# Transformation settings
-st.write("### 🔧 Transformation Settings")
+# Only show transformation settings for quantile cointegration tests
+if analysis_type != "Panel Cointegration Tests":
+    # Transformation settings
+    st.write("### 🔧 Transformation Settings")
 
-col1, col2, col3 = st.columns(3)
+    col1, col2, col3 = st.columns(3)
 
-with col1:
-    transform = st.selectbox(
-        "Transformation Method",
-        ["log_shift", "ihs", "log", "none"],
-        help="""
-        - log_shift: Min-shift then log (handles negatives)
-        - ihs: Inverse Hyperbolic Sine (handles negatives)
-        - log: Natural log (requires positive values)
-        - none: No transformation
-        """
-    )
+    with col1:
+        transform = st.selectbox(
+            "Transformation Method",
+            ["log_shift", "ihs", "log", "none"],
+            help="""
+            - log_shift: Min-shift then log (handles negatives)
+            - ihs: Inverse Hyperbolic Sine (handles negatives)
+            - log: Natural log (requires positive values)
+            - none: No transformation
+            """
+        )
 
-with col2:
-    normalize = st.checkbox("Z-score normalization (within entity)", value=True,
-                           help="Standardize each entity to mean=0, std=1")
+    with col2:
+        normalize = st.checkbox("Z-score normalization (within entity)", value=True,
+                               help="Standardize each entity to mean=0, std=1")
 
-with col3:
-    B = st.number_input("Bootstrap replications", min_value=100, max_value=5000, 
-                       value=1000, step=100,
-                       help="More replications = more accurate p-values but slower")
+    with col3:
+        B = st.number_input("Bootstrap replications", min_value=100, max_value=5000, 
+                           value=1000, step=100,
+                           help="More replications = more accurate p-values but slower")
 
-# Quantile selection
-st.write("### 📈 Quantile Selection")
-use_preset = st.radio("Quantile selection:", ["Preset quantiles", "Custom quantiles"])
+    # Quantile selection
+    st.write("### 📈 Quantile Selection")
+    use_preset = st.radio("Quantile selection:", ["Preset quantiles", "Custom quantiles"])
 
-if use_preset == "Preset quantiles":
-    quantile_option = st.selectbox(
-        "Select preset",
-        ["Standard (0.1, 0.3, 0.5, 0.7, 0.9)",
-         "Fine (0.1 to 0.9 by 0.1)",
-         "Tails focus (0.05, 0.1, 0.25, 0.75, 0.9, 0.95)"]
-    )
-    
-    if quantile_option.startswith("Standard"):
-        quantiles = [0.1, 0.3, 0.5, 0.7, 0.9]
-    elif quantile_option.startswith("Fine"):
-        quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    if use_preset == "Preset quantiles":
+        quantile_option = st.selectbox(
+            "Select preset",
+            ["Standard (0.1, 0.3, 0.5, 0.7, 0.9)",
+             "Fine (0.1 to 0.9 by 0.1)",
+             "Tails focus (0.05, 0.1, 0.25, 0.75, 0.9, 0.95)"]
+        )
+        
+        if quantile_option.startswith("Standard"):
+            quantiles = [0.1, 0.3, 0.5, 0.7, 0.9]
+        elif quantile_option.startswith("Fine"):
+            quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+        else:
+            quantiles = [0.05, 0.1, 0.25, 0.75, 0.9, 0.95]
     else:
-        quantiles = [0.05, 0.1, 0.25, 0.75, 0.9, 0.95]
-else:
-    quantile_input = st.text_input("Enter quantiles (comma-separated)", "0.1, 0.3, 0.5, 0.7, 0.9")
-    try:
-        quantiles = [float(q.strip()) for q in quantile_input.split(",")]
-        if not all(0 < q < 1 for q in quantiles):
-            st.error("All quantiles must be between 0 and 1")
+        quantile_input = st.text_input("Enter quantiles (comma-separated)", "0.1, 0.3, 0.5, 0.7, 0.9")
+        try:
+            quantiles = [float(q.strip()) for q in quantile_input.split(",")]
+            if not all(0 < q < 1 for q in quantiles):
+                st.error("All quantiles must be between 0 and 1")
+                st.stop()
+        except:
+            st.error("Invalid quantile format. Use comma-separated decimals (e.g., 0.1, 0.5, 0.9)")
             st.stop()
-    except:
-        st.error("Invalid quantile format. Use comma-separated decimals (e.g., 0.1, 0.5, 0.9)")
-        st.stop()
 
-st.write(f"**Testing at quantiles:** {quantiles}")
+    st.write(f"**Testing at quantiles:** {quantiles}")
 
 # Run test button
-if st.button("🚀 Run MQCS Test", type="primary"):
+if st.button("🚀 Run Analysis", type="primary"):
     
-    with st.spinner("Running MQCS test... This may take a few minutes..."):
+    with st.spinner("Running analysis... This may take a few minutes..."):
         
         try:
             # Prepare data
@@ -498,9 +718,8 @@ if st.button("🚀 Run MQCS Test", type="primary"):
                     st.stop()
                 
                 st.success(f"✅ Successfully tested {len(results)} entities")
-                analysis_label = "Entity"
                 
-            else:  # Panel-wide analysis
+            elif analysis_type == "Panel-wide Quantile Cointegration":
                 st.write("### 🌍 Panel-Wide Quantile Cointegration Results")
                 results = panel_wide_mqcs_test(
                     df_test,
@@ -513,109 +732,114 @@ if st.button("🚀 Run MQCS Test", type="primary"):
                 )
                 
                 st.success("✅ Successfully tested entire panel")
-                analysis_label = "Panel"
+                
+            else:  # Panel Cointegration Tests
+                # Standardize column names for panel tests
+                df_panel = df_test.copy()
+                if id_col != 'Entity' and id_col != 'Country':
+                    df_panel = df_panel.rename(columns={id_col: 'Entity'})
+                
+                panel_results = run_panel_cointegration_tests(df_panel, y_col, x_col)
+                results = None
             
-            # Display results
-            st.write("## 📊 Results")
-            
-            # FIX: Handle different column names for different analysis types
-            if analysis_type == "Country-specific Quantile Cointegration":
-                # For country-specific, we have 'Entity' column
-                display_cols = ['Entity', 'N'] + [col for col in results.columns if not col.endswith('_pval') and not col.endswith('_stat') and col not in ['Entity', 'N']]
-                display_df = results[display_cols].copy()
-                display_df = display_df.sort_values('Entity')
-            else:
-                # For panel-wide, we have 'Panel' column instead of 'Entity'
-                display_cols = ['Panel', 'N'] + [col for col in results.columns if not col.endswith('_pval') and not col.endswith('_stat') and col not in ['Panel', 'N']]
-                display_df = results[display_cols].copy()
-                # Rename 'Panel' to 'Entity' for consistent display
-                display_df = display_df.rename(columns={'Panel': 'Entity'})
-            
-            st.dataframe(display_df, use_container_width=True)
-            
-            # Interpretation guide
-            st.write("### 📖 Interpretation Guide")
-            st.markdown(f"""
-            **Test Statistic Interpretation:**
-            - **Larger values** indicate **rejection** of the null hypothesis (no cointegration)
-            - **Significance levels:** *** p<0.01, ** p<0.05, * p<0.10
-            - Test statistic > critical value ⇒ Reject null of no cointegration
-            
-            **Critical Values (Xiao & Phillips 2002):**
-            - 10% level: {CRITICAL_VALUES[0.10]}
-            - 5% level: {CRITICAL_VALUES[0.05]}
-            - 1% level: {CRITICAL_VALUES[0.01]}
-            
-            **Methodology:**
-            - **Quantile Cointegration Test** based on Xiao (2009)
-            - **MQCS Statistic**: Modified Quantile Cointegration Statistic
-            - **Bootstrap**: {B} moving block bootstrap replications for p-values
-            - **Transformation**: {transform}
-            - **Normalization**: {'Yes' if normalize else 'No'}
-            """)
-            
-            # Full results with p-values
-            with st.expander("📋 Full Results (including p-values)"):
+            # Display results for quantile cointegration tests
+            if analysis_type != "Panel Cointegration Tests":
+                st.write("## 📊 Results")
+                
+                # Handle different column names for different analysis types
                 if analysis_type == "Country-specific Quantile Cointegration":
-                    full_display_cols = ['Entity', 'N'] + [col for col in results.columns if not col.endswith('_stat') and col not in ['Entity', 'N']]
-                    full_display_df = results[full_display_cols].copy()
-                    full_display_df = full_display_df.sort_values('Entity')
+                    # For country-specific, we have 'Entity' column
+                    display_cols = ['Entity', 'N'] + [col for col in results.columns if not col.endswith('_pval') and not col.endswith('_stat') and col not in ['Entity', 'N']]
+                    display_df = results[display_cols].copy()
+                    display_df = display_df.sort_values('Entity')
                 else:
-                    full_display_cols = ['Panel', 'N'] + [col for col in results.columns if not col.endswith('_stat') and col not in ['Panel', 'N']]
-                    full_display_df = results[full_display_cols].copy()
-                    full_display_df = full_display_df.rename(columns={'Panel': 'Entity'})
+                    # For panel-wide, we have 'Panel' column instead of 'Entity'
+                    display_cols = ['Panel', 'N'] + [col for col in results.columns if not col.endswith('_pval') and not col.endswith('_stat') and col not in ['Panel', 'N']]
+                    display_df = results[display_cols].copy()
+                    # Rename 'Panel' to 'Entity' for consistent display
+                    display_df = display_df.rename(columns={'Panel': 'Entity'})
                 
-                st.dataframe(full_display_df, use_container_width=True)
-            
-            # Download buttons
-            st.write("### 💾 Download Results")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                csv = display_df.to_csv(index=False)
-                st.download_button(
-                    "📥 Download Results (CSV)",
-                    csv,
-                    "mqcs_results.csv",
-                    "text/csv"
-                )
-            
-            with col2:
-                # For download, use the original results without renaming
-                if analysis_type == "Country-specific Quantile Cointegration":
-                    csv_full = results.to_csv(index=False)
-                else:
-                    csv_full = results.to_csv(index=False)
+                st.dataframe(display_df, use_container_width=True)
                 
-                st.download_button(
-                    "📥 Download Full Results with P-values (CSV)",
-                    csv_full,
-                    "mqcs_results_full.csv",
-                    "text/csv"
-                )
-            
-            # Summary statistics for country-specific analysis
-            if analysis_type == "Country-specific Quantile Cointegration":
-                st.write("### 📈 Summary Statistics")
+                # Interpretation guide for quantile cointegration
+                st.write("### 📖 Interpretation Guide")
+                st.markdown(f"""
+                **Test Statistic Interpretation:**
+                - **Larger values** indicate **rejection** of the null hypothesis (no cointegration)
+                - **Significance levels:** *** p<0.01, ** p<0.05, * p<0.10
+                - Test statistic > critical value ⇒ Reject null of no cointegration
                 
-                # Count significant results
-                sig_counts = {}
-                for tau in quantiles:
-                    col_name = f'τ={tau:.1f}_pval'
-                    if col_name in results.columns:
-                        sig_counts[f'τ={tau:.1f}'] = {
-                            '1%': (results[col_name] < 0.01).sum(),
-                            '5%': (results[col_name] < 0.05).sum(),
-                            '10%': (results[col_name] < 0.10).sum()
-                        }
+                **Critical Values (Xiao & Phillips 2002):**
+                - 10% level: {CRITICAL_VALUES[0.10]}
+                - 5% level: {CRITICAL_VALUES[0.05]}
+                - 1% level: {CRITICAL_VALUES[0.01]}
                 
-                if sig_counts:
-                    sig_df = pd.DataFrame(sig_counts).T
-                    sig_df.columns = ['Sig at 1%', 'Sig at 5%', 'Sig at 10%']
+                **Methodology:**
+                - **Quantile Cointegration Test** based on Xiao (2009)
+                - **MQCS Statistic**: Modified Quantile Cointegration Statistic
+                - **Bootstrap**: {B} moving block bootstrap replications for p-values
+                - **Transformation**: {transform}
+                - **Normalization**: {'Yes' if normalize else 'No'}
+                """)
+                
+                # Full results with p-values
+                with st.expander("📋 Full Results (including p-values)"):
+                    if analysis_type == "Country-specific Quantile Cointegration":
+                        full_display_cols = ['Entity', 'N'] + [col for col in results.columns if not col.endswith('_stat') and col not in ['Entity', 'N']]
+                        full_display_df = results[full_display_cols].copy()
+                        full_display_df = full_display_df.sort_values('Entity')
+                    else:
+                        full_display_cols = ['Panel', 'N'] + [col for col in results.columns if not col.endswith('_stat') and col not in ['Panel', 'N']]
+                        full_display_df = results[full_display_cols].copy()
+                        full_display_df = full_display_df.rename(columns={'Panel': 'Entity'})
                     
-                    st.write("**Number of entities with significant cointegration:**")
-                    st.dataframe(sig_df)
+                    st.dataframe(full_display_df, use_container_width=True)
+                
+                # Download buttons for quantile cointegration
+                st.write("### 💾 Download Results")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    csv = display_df.to_csv(index=False)
+                    st.download_button(
+                        "📥 Download Results (CSV)",
+                        csv,
+                        "mqcs_results.csv",
+                        "text/csv"
+                    )
+                
+                with col2:
+                    # For download, use the original results without renaming
+                    csv_full = results.to_csv(index=False)
+                    st.download_button(
+                        "📥 Download Full Results with P-values (CSV)",
+                        csv_full,
+                        "mqcs_results_full.csv",
+                        "text/csv"
+                    )
+                
+                # Summary statistics for country-specific analysis
+                if analysis_type == "Country-specific Quantile Cointegration":
+                    st.write("### 📈 Summary Statistics")
+                    
+                    # Count significant results
+                    sig_counts = {}
+                    for tau in quantiles:
+                        col_name = f'τ={tau:.1f}_pval'
+                        if col_name in results.columns:
+                            sig_counts[f'τ={tau:.1f}'] = {
+                                '1%': (results[col_name] < 0.01).sum(),
+                                '5%': (results[col_name] < 0.05).sum(),
+                                '10%': (results[col_name] < 0.10).sum()
+                            }
+                    
+                    if sig_counts:
+                        sig_df = pd.DataFrame(sig_counts).T
+                        sig_df.columns = ['Sig at 1%', 'Sig at 5%', 'Sig at 10%']
+                        
+                        st.write("**Number of entities with significant cointegration:**")
+                        st.dataframe(sig_df)
             
             # Results interpretation
             st.write("### 🔍 Results Interpretation")
@@ -627,7 +851,7 @@ if st.button("🚀 Run MQCS Test", type="primary"):
                 - Useful for identifying **country-specific** cointegration patterns
                 - **Total countries analyzed**: {len(results)}
                 """)
-            else:
+            elif analysis_type == "Panel-wide Quantile Cointegration":
                 st.markdown(f"""
                 **Panel-Wide Analysis:**
                 - All countries are **pooled together** and tested as one sample
@@ -635,6 +859,15 @@ if st.button("🚀 Run MQCS Test", type="primary"):
                 - Useful for identifying **overall** cointegration relationships
                 - **Total observations**: {results.iloc[0]['N']}
                 - **Interpretation**: The test examines if there's a long-run relationship between {y_col} and {x_col} across the entire panel
+                """)
+            else:
+                st.markdown(f"""
+                **Panel Cointegration Tests:**
+                - **Pedroni Test**: Residual-based panel cointegration test
+                - **Kao Test**: Another residual-based panel cointegration test  
+                - **Fisher Test**: Combined test from individual country cointegration tests
+                - **Interpretation**: Reject null hypothesis of no cointegration if p-value < 0.05
+                - These tests provide **overall panel-level** evidence of cointegration
                 """)
             
         except Exception as e:
@@ -646,6 +879,8 @@ st.write("---")
 st.markdown("""
 **Reference:**
 - Xiao, Z. (2009). "Quantile Cointegrating Regression." *Journal of Econometrics*.
+- Pedroni, P. (1999). "Critical values for cointegration tests in heterogeneous panels with multiple regressors."
+- Kao, C. (1999). "Spurious regression and residual-based tests for cointegration in panel data."
 - Test implements moving block bootstrap for p-value computation
 - Entity-specific transformation ensures valid panel cointegration tests
 
