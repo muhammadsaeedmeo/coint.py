@@ -498,6 +498,7 @@ if st.button("🚀 Run MQCS Test", type="primary"):
                     st.stop()
                 
                 st.success(f"✅ Successfully tested {len(results)} entities")
+                analysis_label = "Entity"
                 
             else:  # Panel-wide analysis
                 st.write("### 🌍 Panel-Wide Quantile Cointegration Results")
@@ -512,17 +513,23 @@ if st.button("🚀 Run MQCS Test", type="primary"):
                 )
                 
                 st.success("✅ Successfully tested entire panel")
+                analysis_label = "Panel"
             
             # Display results
             st.write("## 📊 Results")
             
-            # Prepare display table (without p-values for cleaner view)
-            display_cols = ['Entity', 'N'] + [col for col in results.columns if not col.endswith('_pval') and not col.endswith('_stat') and col not in ['Entity', 'N']]
-            display_df = results[display_cols].copy()
-            
-            # Sort by entity name for country-specific, keep as is for panel
+            # FIX: Handle different column names for different analysis types
             if analysis_type == "Country-specific Quantile Cointegration":
+                # For country-specific, we have 'Entity' column
+                display_cols = ['Entity', 'N'] + [col for col in results.columns if not col.endswith('_pval') and not col.endswith('_stat') and col not in ['Entity', 'N']]
+                display_df = results[display_cols].copy()
                 display_df = display_df.sort_values('Entity')
+            else:
+                # For panel-wide, we have 'Panel' column instead of 'Entity'
+                display_cols = ['Panel', 'N'] + [col for col in results.columns if not col.endswith('_pval') and not col.endswith('_stat') and col not in ['Panel', 'N']]
+                display_df = results[display_cols].copy()
+                # Rename 'Panel' to 'Entity' for consistent display
+                display_df = display_df.rename(columns={'Panel': 'Entity'})
             
             st.dataframe(display_df, use_container_width=True)
             
@@ -549,10 +556,15 @@ if st.button("🚀 Run MQCS Test", type="primary"):
             
             # Full results with p-values
             with st.expander("📋 Full Results (including p-values)"):
-                full_display_cols = ['Entity', 'N'] + [col for col in results.columns if not col.endswith('_stat') and col not in ['Entity', 'N']]
-                full_display_df = results[full_display_cols].copy()
                 if analysis_type == "Country-specific Quantile Cointegration":
+                    full_display_cols = ['Entity', 'N'] + [col for col in results.columns if not col.endswith('_stat') and col not in ['Entity', 'N']]
+                    full_display_df = results[full_display_cols].copy()
                     full_display_df = full_display_df.sort_values('Entity')
+                else:
+                    full_display_cols = ['Panel', 'N'] + [col for col in results.columns if not col.endswith('_stat') and col not in ['Panel', 'N']]
+                    full_display_df = results[full_display_cols].copy()
+                    full_display_df = full_display_df.rename(columns={'Panel': 'Entity'})
+                
                 st.dataframe(full_display_df, use_container_width=True)
             
             # Download buttons
@@ -570,7 +582,12 @@ if st.button("🚀 Run MQCS Test", type="primary"):
                 )
             
             with col2:
-                csv_full = results.to_csv(index=False)
+                # For download, use the original results without renaming
+                if analysis_type == "Country-specific Quantile Cointegration":
+                    csv_full = results.to_csv(index=False)
+                else:
+                    csv_full = results.to_csv(index=False)
+                
                 st.download_button(
                     "📥 Download Full Results with P-values (CSV)",
                     csv_full,
@@ -617,6 +634,7 @@ if st.button("🚀 Run MQCS Test", type="primary"):
                 - Results show whether the **entire panel** exhibits cointegration at different quantiles
                 - Useful for identifying **overall** cointegration relationships
                 - **Total observations**: {results.iloc[0]['N']}
+                - **Interpretation**: The test examines if there's a long-run relationship between {y_col} and {x_col} across the entire panel
                 """)
             
         except Exception as e:
