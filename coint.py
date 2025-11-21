@@ -339,6 +339,232 @@ def panel_wide_mqcs_test(df, y_col, x_col, quantiles=[0.1, 0.3, 0.5, 0.7, 0.9],
     
     return pd.DataFrame([results])
 
+# =============================================================================
+# PANEL COINTEGRATION TESTS
+# =============================================================================
+
+def pedroni_panel_cointegration(df, y_col, x_col):
+    """
+    Pedroni (1999) panel cointegration test
+    Tests for cointegration in panel data using residual-based approach
+    """
+    try:
+        # Determine entity column name
+        entity_col = 'Entity' if 'Entity' in df.columns else 'Country'
+        entities = df[entity_col].unique()
+        residuals_list = []
+        n_entities = len(entities)
+        
+        for entity in entities:
+            entity_data = df[df[entity_col] == entity]
+            if len(entity_data) < 10:
+                continue
+                
+            y = entity_data[y_col].values
+            x = entity_data[x_col].values
+            
+            # Run OLS regression
+            X = sm.add_constant(x)
+            model = sm.OLS(y, X)
+            results = model.fit()
+            residuals = results.resid
+            
+            residuals_list.append(residuals)
+        
+        if len(residuals_list) < 2:
+            return {
+                'Test': 'Pedroni Panel Cointegration', 
+                'Statistic': np.nan, 
+                'P-value': np.nan, 
+                'Interpretation': 'Insufficient data'
+            }
+        
+        # Calculate panel cointegration statistic (simplified version)
+        all_residuals = np.concatenate(residuals_list)
+        adf_stat, p_value, _, _, _ = sm.tsa.adfuller(all_residuals)
+        
+        return {
+            'Test': 'Pedroni Panel Cointegration',
+            'Statistic': round(adf_stat, 4),
+            'P-value': p_value,
+            'Interpretation': 'Reject null of no cointegration if p-value < 0.05'
+        }
+        
+    except Exception as e:
+        return {
+            'Test': 'Pedroni Panel Cointegration',
+            'Statistic': np.nan, 
+            'P-value': np.nan, 
+            'Interpretation': f'Error: {str(e)}'
+        }
+
+def kao_panel_cointegration(df, y_col, x_col):
+    """
+    Kao (1999) panel cointegration test
+    Another residual-based panel cointegration test
+    """
+    try:
+        entity_col = 'Entity' if 'Entity' in df.columns else 'Country'
+        entities = df[entity_col].unique()
+        t_stats = []
+        
+        for entity in entities:
+            entity_data = df[df[entity_col] == entity]
+            if len(entity_data) < 10:
+                continue
+                
+            y = entity_data[y_col].values
+            x = entity_data[x_col].values
+            
+            # Run OLS regression
+            X = sm.add_constant(x)
+            model = sm.OLS(y, X)
+            results = model.fit()
+            residuals = results.resid
+            
+            # ADF test on residuals
+            adf_stat, p_value, _, _, _ = sm.tsa.adfuller(residuals)
+            t_stats.append(adf_stat)
+        
+        if len(t_stats) < 2:
+            return {
+                'Test': 'Kao Panel Cointegration',
+                'Statistic': np.nan, 
+                'P-value': np.nan, 
+                'Interpretation': 'Insufficient data'
+            }
+        
+        # Kao test statistic (simplified)
+        mean_t_stat = np.mean(t_stats)
+        # Simplified p-value calculation
+        p_value = 1 - stats.norm.cdf(abs(mean_t_stat))
+        
+        return {
+            'Test': 'Kao Panel Cointegration',
+            'Statistic': round(mean_t_stat, 4),
+            'P-value': p_value,
+            'Interpretation': 'Reject null of no cointegration if p-value < 0.05'
+        }
+        
+    except Exception as e:
+        return {
+            'Test': 'Kao Panel Cointegration',
+            'Statistic': np.nan, 
+            'P-value': np.nan, 
+            'Interpretation': f'Error: {str(e)}'
+        }
+
+def fisher_combined_cointegration(df, y_col, x_col):
+    """
+    Fisher's combined test for panel cointegration
+    Combines p-values from individual country cointegration tests
+    """
+    try:
+        entity_col = 'Entity' if 'Entity' in df.columns else 'Country'
+        entities = df[entity_col].unique()
+        p_values = []
+        
+        for entity in entities:
+            entity_data = df[df[entity_col] == entity]
+            if len(entity_data) < 10:
+                continue
+                
+            y = entity_data[y_col].values
+            x = entity_data[x_col].values
+            
+            # ADF test on residuals from OLS regression
+            X = sm.add_constant(x)
+            model = sm.OLS(y, X)
+            results = model.fit()
+            residuals = results.resid
+            
+            _, p_value, _, _, _ = sm.tsa.adfuller(residuals)
+            p_values.append(p_value)
+        
+        if len(p_values) < 2:
+            return {
+                'Test': 'Fisher Combined Test',
+                'Statistic': np.nan, 
+                'P-value': np.nan, 
+                'Interpretation': 'Insufficient data'
+            }
+        
+        # Fisher's combined test
+        chi2_stat = -2 * np.sum(np.log(p_values))
+        df = 2 * len(p_values)
+        p_value = 1 - stats.chi2.cdf(chi2_stat, df)
+        
+        return {
+            'Test': 'Fisher Combined Test',
+            'Statistic': round(chi2_stat, 4),
+            'P-value': p_value,
+            'Interpretation': 'Reject null of no cointegration if p-value < 0.05'
+        }
+        
+    except Exception as e:
+        return {
+            'Test': 'Fisher Combined Test',
+            'Statistic': np.nan, 
+            'P-value': np.nan, 
+            'Interpretation': f'Error: {str(e)}'
+        }
+
+def run_panel_cointegration_tests(df, y_col, x_col):
+    """
+    Run multiple panel cointegration tests
+    """
+    st.write("### 🌍 Panel Cointegration Tests")
+    st.write("Testing for cointegration in the entire panel using different methodologies:")
+    
+    results = []
+    
+    # Run different panel cointegration tests
+    tests = [
+        pedroni_panel_cointegration,
+        kao_panel_cointegration,
+        fisher_combined_cointegration
+    ]
+    
+    for test_func in tests:
+        result = test_func(df, y_col, x_col)
+        results.append(result)
+    
+    # Create results dataframe
+    panel_results = pd.DataFrame(results)
+    
+    # Add significance stars to P-value column
+    def add_stars(pval):
+        if pd.isna(pval):
+            return 'N/A'
+        if pval < 0.01:
+            return f"{pval:.4f}***"
+        elif pval < 0.05:
+            return f"{pval:.4f}**"
+        elif pval < 0.10:
+            return f"{pval:.4f}*"
+        else:
+            return f"{pval:.4f}"
+    
+    if 'P-value' in panel_results.columns:
+        panel_results['P-value'] = panel_results['P-value'].apply(add_stars)
+    
+    # Ensure all required columns exist
+    required_columns = ['Test', 'Statistic', 'P-value', 'Interpretation']
+    for col in required_columns:
+        if col not in panel_results.columns:
+            panel_results[col] = 'N/A'
+    
+    # Display results
+    st.dataframe(panel_results[required_columns], use_container_width=True)
+    
+    return panel_results
+
+# Critical values from Xiao and Phillips (2002) for constant coefficient case
+CRITICAL_VALUES = {
+    0.10: 1.616,  # 10% significance
+    0.05: 1.842,  # 5% significance
+    0.01: 2.326   # 1% significance
+}
 
 # =============================================================================
 # STREAMLIT APP
