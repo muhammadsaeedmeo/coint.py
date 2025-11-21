@@ -264,12 +264,18 @@ for idx, entity in enumerate(entities):
 progress_bar.empty()
 
 if errors:
-    with st.expander("⚠️ Warnings/Errors during processing"):
-        for err in errors:
-            st.warning(err)
+    st.error(f"⚠️ {len(errors)} errors occurred during processing:")
+    for err in errors:
+        st.error(err)
 
 if not results:
-    st.error("❌ No valid results. Please check your data.")
+    st.error("❌ No valid results. Please check your data and errors above.")
+    st.write("**Debug Info:**")
+    st.write(f"- Total entities in data: {len(entities)}")
+    st.write(f"- Entities processed: {len(results)}")
+    st.write(f"- Errors encountered: {len(errors)}")
+    st.write("\n**Transformed data sample:**")
+    st.dataframe(panel_transformed.head(20))
     st.stop()
 
 out = pd.DataFrame(results).set_index('ID')
