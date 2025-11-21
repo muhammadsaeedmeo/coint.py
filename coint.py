@@ -108,12 +108,16 @@ for entity, entity_df in panel.groupby(entity_col):
     
     # Check for inf/nan after transformation
     if entity_transformed[[y_col] + x_cols].isin([np.inf, -np.inf]).any().any():
-        st.error(f"❌ {entity}: inf values after transformation")
-        st.stop()
+        inf_cols = [col for col in [y_col] + x_cols if entity_transformed[col].isin([np.inf, -np.inf]).any()]
+        transformation_log.append(f"⚠️ {entity}: inf in {inf_cols}")
+        st.warning(f"⚠️ {entity}: inf values in {inf_cols} after transformation - SKIPPING")
+        continue
     
     if entity_transformed[[y_col] + x_cols].isna().any().any():
-        st.error(f"❌ {entity}: NaN values after transformation")
-        st.stop()
+        nan_cols = [col for col in [y_col] + x_cols if entity_transformed[col].isna().any()]
+        transformation_log.append(f"⚠️ {entity}: NaN in {nan_cols}")
+        st.warning(f"⚠️ {entity}: NaN values in {nan_cols} after transformation - SKIPPING")
+        continue
     
     # Z-score normalization (within entity)
     if normalize:
@@ -130,6 +134,12 @@ for entity, entity_df in panel.groupby(entity_col):
     transformed_data.append(entity_transformed)
 
 panel_transformed = pd.concat(transformed_data, ignore_index=True)
+
+st.write(f"✅ Successfully transformed {len(transformed_data)} out of {panel[entity_col].nunique()} entities")
+
+if len(transformed_data) == 0:
+    st.error("❌ No entities successfully transformed. Check transformation logs above.")
+    st.stop()
 
 # Prepare for visualization
 if date_col != "none":
@@ -235,12 +245,33 @@ for idx, entity in enumerate(entities):
         y = sub[y_col].values
         x1 = sub[x_cols[0]].values
         
+        # Detailed validation
         if len(y) < 10:
-            errors.append(f"ID {entity}: insufficient data (n={len(y)})")
+            errors.append(f"❌ {entity}: insufficient data (n={len(y)}, need ≥10)")
             continue
         
-        if not np.all(np.isfinite(y)) or not np.all(np.isfinite(x1)):
-            errors.append(f"ID {entity}: contains inf/NaN")
+        # Check for NaN
+        if np.any(np.isnan(y)):
+            errors.append(f"❌ {entity}: y contains NaN (count={np.sum(np.isnan(y))})")
+            continue
+        if np.any(np.isnan(x1)):
+            errors.append(f"❌ {entity}: x contains NaN (count={np.sum(np.isnan(x1))})")
+            continue
+            
+        # Check for inf
+        if np.any(np.isinf(y)):
+            errors.append(f"❌ {entity}: y contains inf (count={np.sum(np.isinf(y))})")
+            continue
+        if np.any(np.isinf(x1)):
+            errors.append(f"❌ {entity}: x contains inf (count={np.sum(np.isinf(x1))})")
+            continue
+        
+        # Check for zero variance
+        if np.std(y) == 0:
+            errors.append(f"❌ {entity}: y has zero variance (constant)")
+            continue
+        if np.std(x1) == 0:
+            errors.append(f"❌ {entity}: x has zero variance (constant)")
             continue
         
         row = {'ID': entity, 'N': len(y)}
