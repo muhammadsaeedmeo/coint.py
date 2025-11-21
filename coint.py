@@ -179,7 +179,7 @@ class MQCSTest:
         
         return np.array(boot_sample[:n])
 
-def _transform_data(y, x, method, entity_name):
+def _transform_data(y, x, method, entity_name=""):
     """Apply transformation to data"""
     
     if method == 'log_shift':
@@ -216,31 +216,7 @@ def _transform_data(y, x, method, entity_name):
 def panel_mqcs_test(df, id_col, y_col, x_col, quantiles=[0.1, 0.3, 0.5, 0.7, 0.9],
                     B=1000, transform='log_shift', normalize=True):
     """
-    Run MQCS test on panel data
-    
-    Parameters:
-    -----------
-    df : DataFrame
-        Panel data
-    id_col : str
-        Column name for entity ID (e.g., country)
-    y_col : str
-        Column name for dependent variable
-    x_col : str
-        Column name for independent variable
-    quantiles : list
-        List of quantiles to test
-    B : int
-        Number of bootstrap replications
-    transform : str
-        Transformation method: 'log_shift', 'ihs', 'log', or 'none'
-    normalize : bool
-        Whether to apply z-score normalization within entity
-    
-    Returns:
-    --------
-    results_df : DataFrame
-        Results table with test statistics and p-values for each entity and quantile
+    Run MQCS test on panel data - COUNTRY SPECIFIC
     """
     
     results = []
@@ -293,15 +269,75 @@ def panel_mqcs_test(df, id_col, y_col, x_col, quantiles=[0.1, 0.3, 0.5, 0.7, 0.9
                 
                 row[f'τ={tau:.1f}'] = f"{stat:.3f}{stars}"
                 row[f'τ={tau:.1f}_pval'] = pval
+                row[f'τ={tau:.1f}_stat'] = stat  # Store raw stat for sorting
                 
             except Exception as e:
                 st.warning(f"Error for {entity} at τ={tau}: {str(e)}")
                 row[f'τ={tau:.1f}'] = 'N/A'
                 row[f'τ={tau:.1f}_pval'] = np.nan
+                row[f'τ={tau:.1f}_stat'] = np.nan
         
         results.append(row)
     
     return pd.DataFrame(results)
+
+def panel_wide_mqcs_test(df, y_col, x_col, quantiles=[0.1, 0.3, 0.5, 0.7, 0.9],
+                         B=1000, transform='log_shift', normalize=True):
+    """
+    Run MQCS test on ENTIRE PANEL (pooled data)
+    """
+    
+    # Combine all data
+    y_data = df[y_col].values
+    x_data = df[x_col].values
+    
+    # Apply transformation
+    try:
+        y_data, x_data = _transform_data(y_data, x_data, transform, "Panel")
+    except Exception as e:
+        raise ValueError(f"Panel transformation error: {str(e)}")
+    
+    # Apply normalization to entire panel
+    if normalize:
+        y_data = (y_data - np.mean(y_data)) / np.std(y_data)
+        x_data = (x_data - np.mean(x_data)) / np.std(x_data)
+    
+    # Check validity
+    if len(y_data) < 20:
+        raise ValueError(f"Insufficient panel data: n={len(y_data)}")
+    
+    if not np.all(np.isfinite(y_data)) or not np.all(np.isfinite(x_data)):
+        raise ValueError("Panel data contains inf/NaN")
+    
+    # Run tests at each quantile for entire panel
+    results = {'Panel': 'All Countries', 'N': len(y_data)}
+    
+    for tau in quantiles:
+        try:
+            test = MQCSTest(y_data, x_data, tau=tau)
+            stat, pval, _ = test.bootstrap_pvalue(B=B)
+            
+            # Add significance stars
+            if pval < 0.01:
+                stars = '***'
+            elif pval < 0.05:
+                stars = '**'
+            elif pval < 0.10:
+                stars = '*'
+            else:
+                stars = ''
+            
+            results[f'τ={tau:.1f}'] = f"{stat:.3f}{stars}"
+            results[f'τ={tau:.1f}_pval'] = pval
+            results[f'τ={tau:.1f}_stat'] = stat
+            
+        except Exception as e:
+            st.warning(f"Error for panel at τ={tau}: {str(e)}")
+            results[f'τ={tau:.1f}'] = 'N/A'
+            results[f'τ={tau:.1f}_pval'] = np.nan
+            results[f'τ={tau:.1f}_stat'] = np.nan
+    
+    return pd.DataFrame([results])
 
 # Critical values from Xiao and Phillips (2002) for constant coefficient case
 CRITICAL_VALUES = {
@@ -311,7 +347,7 @@ CRITICAL_VALUES = {
 }
 
 # =============================================================================
-# STREAMLIT APP (your original coint.py)
+# STREAMLIT APP
 # =============================================================================
 
 st.set_page_config(page_title="MQCS Quantile Cointegration", layout="wide")
@@ -349,6 +385,14 @@ df_raw = load_data(uploaded)
 st.write("### 📁 Raw Data Preview")
 st.dataframe(df_raw.head(10))
 st.write(f"**Shape:** {df_raw.shape[0]} rows × {df_raw.shape[1]} columns")
+
+# Analysis type selection
+st.write("### 🔄 Analysis Type")
+analysis_type = st.radio(
+    "Select analysis type:",
+    ["Country-specific Quantile Cointegration", "Panel-wide Quantile Cointegration"],
+    help="Country-specific: Test each country separately. Panel-wide: Test all countries together as one pooled sample."
+)
 
 # Column selection
 st.write("### ⚙️ Configure Analysis")
@@ -435,29 +479,50 @@ if st.button("🚀 Run MQCS Test", type="primary"):
             st.write(f"**Entities:** {df_test[id_col].nunique()}")
             st.write(f"**Total observations:** {len(df_test)}")
             
-            # Run test
-            results = panel_mqcs_test(
-                df_test,
-                id_col=id_col,
-                y_col=y_col,
-                x_col=x_col,
-                quantiles=quantiles,
-                B=B,
-                transform=transform,
-                normalize=normalize
-            )
-            
-            if len(results) == 0:
-                st.error("❌ No valid results. Check warnings above.")
-                st.stop()
+            # Run appropriate test based on analysis type
+            if analysis_type == "Country-specific Quantile Cointegration":
+                st.write("### 🏴‍☠️ Country-Specific Quantile Cointegration Results")
+                results = panel_mqcs_test(
+                    df_test,
+                    id_col=id_col,
+                    y_col=y_col,
+                    x_col=x_col,
+                    quantiles=quantiles,
+                    B=B,
+                    transform=transform,
+                    normalize=normalize
+                )
+                
+                if len(results) == 0:
+                    st.error("❌ No valid results. Check warnings above.")
+                    st.stop()
+                
+                st.success(f"✅ Successfully tested {len(results)} entities")
+                
+            else:  # Panel-wide analysis
+                st.write("### 🌍 Panel-Wide Quantile Cointegration Results")
+                results = panel_wide_mqcs_test(
+                    df_test,
+                    y_col=y_col,
+                    x_col=x_col,
+                    quantiles=quantiles,
+                    B=B,
+                    transform=transform,
+                    normalize=normalize
+                )
+                
+                st.success("✅ Successfully tested entire panel")
             
             # Display results
             st.write("## 📊 Results")
-            st.success(f"✅ Successfully tested {len(results)} entities")
             
             # Prepare display table (without p-values for cleaner view)
-            display_cols = ['Entity', 'N'] + [col for col in results.columns if not col.endswith('_pval') and col not in ['Entity', 'N']]
+            display_cols = ['Entity', 'N'] + [col for col in results.columns if not col.endswith('_pval') and not col.endswith('_stat') and col not in ['Entity', 'N']]
             display_df = results[display_cols].copy()
+            
+            # Sort by entity name for country-specific, keep as is for panel
+            if analysis_type == "Country-specific Quantile Cointegration":
+                display_df = display_df.sort_values('Entity')
             
             st.dataframe(display_df, use_container_width=True)
             
@@ -465,21 +530,30 @@ if st.button("🚀 Run MQCS Test", type="primary"):
             st.write("### 📖 Interpretation Guide")
             st.markdown(f"""
             **Test Statistic Interpretation:**
-            - Larger values indicate **rejection** of the null hypothesis (no cointegration)
-            - Stars indicate significance: *** p<0.01, ** p<0.05, * p<0.10
+            - **Larger values** indicate **rejection** of the null hypothesis (no cointegration)
+            - **Significance levels:** *** p<0.01, ** p<0.05, * p<0.10
+            - Test statistic > critical value ⇒ Reject null of no cointegration
             
             **Critical Values (Xiao & Phillips 2002):**
             - 10% level: {CRITICAL_VALUES[0.10]}
             - 5% level: {CRITICAL_VALUES[0.05]}
             - 1% level: {CRITICAL_VALUES[0.01]}
             
-            **Note:** P-values are computed via {B} bootstrap replications.
-            Bootstrap accounts for finite-sample properties and serial correlation.
+            **Methodology:**
+            - **Quantile Cointegration Test** based on Xiao (2009)
+            - **MQCS Statistic**: Modified Quantile Cointegration Statistic
+            - **Bootstrap**: {B} moving block bootstrap replications for p-values
+            - **Transformation**: {transform}
+            - **Normalization**: {'Yes' if normalize else 'No'}
             """)
             
             # Full results with p-values
             with st.expander("📋 Full Results (including p-values)"):
-                st.dataframe(results, use_container_width=True)
+                full_display_cols = ['Entity', 'N'] + [col for col in results.columns if not col.endswith('_stat') and col not in ['Entity', 'N']]
+                full_display_df = results[full_display_cols].copy()
+                if analysis_type == "Country-specific Quantile Cointegration":
+                    full_display_df = full_display_df.sort_values('Entity')
+                st.dataframe(full_display_df, use_container_width=True)
             
             # Download buttons
             st.write("### 💾 Download Results")
@@ -504,25 +578,46 @@ if st.button("🚀 Run MQCS Test", type="primary"):
                     "text/csv"
                 )
             
-            # Summary statistics
-            st.write("### 📈 Summary Statistics")
+            # Summary statistics for country-specific analysis
+            if analysis_type == "Country-specific Quantile Cointegration":
+                st.write("### 📈 Summary Statistics")
+                
+                # Count significant results
+                sig_counts = {}
+                for tau in quantiles:
+                    col_name = f'τ={tau:.1f}_pval'
+                    if col_name in results.columns:
+                        sig_counts[f'τ={tau:.1f}'] = {
+                            '1%': (results[col_name] < 0.01).sum(),
+                            '5%': (results[col_name] < 0.05).sum(),
+                            '10%': (results[col_name] < 0.10).sum()
+                        }
+                
+                if sig_counts:
+                    sig_df = pd.DataFrame(sig_counts).T
+                    sig_df.columns = ['Sig at 1%', 'Sig at 5%', 'Sig at 10%']
+                    
+                    st.write("**Number of entities with significant cointegration:**")
+                    st.dataframe(sig_df)
             
-            # Count significant results
-            sig_counts = {}
-            for tau in quantiles:
-                col_name = f'τ={tau:.1f}_pval'
-                if col_name in results.columns:
-                    sig_counts[f'τ={tau:.1f}'] = {
-                        '1%': (results[col_name] < 0.01).sum(),
-                        '5%': (results[col_name] < 0.05).sum(),
-                        '10%': (results[col_name] < 0.10).sum()
-                    }
-            
-            sig_df = pd.DataFrame(sig_counts).T
-            sig_df.columns = ['Sig at 1%', 'Sig at 5%', 'Sig at 10%']
-            
-            st.write("**Number of entities with significant cointegration:**")
-            st.dataframe(sig_df)
+            # Results interpretation
+            st.write("### 🔍 Results Interpretation")
+            if analysis_type == "Country-specific Quantile Cointegration":
+                st.markdown(f"""
+                **Country-Specific Analysis:**
+                - Each country is tested **independently** for quantile cointegration
+                - Results show whether **individual countries** exhibit cointegration at different quantiles
+                - Useful for identifying **country-specific** cointegration patterns
+                - **Total countries analyzed**: {len(results)}
+                """)
+            else:
+                st.markdown(f"""
+                **Panel-Wide Analysis:**
+                - All countries are **pooled together** and tested as one sample
+                - Results show whether the **entire panel** exhibits cointegration at different quantiles
+                - Useful for identifying **overall** cointegration relationships
+                - **Total observations**: {results.iloc[0]['N']}
+                """)
             
         except Exception as e:
             st.error(f"❌ Error during analysis: {str(e)}")
@@ -535,4 +630,7 @@ st.markdown("""
 - Xiao, Z. (2009). "Quantile Cointegrating Regression." *Journal of Econometrics*.
 - Test implements moving block bootstrap for p-value computation
 - Entity-specific transformation ensures valid panel cointegration tests
+
+**Note:** The MQCS test examines cointegration across different parts of the conditional distribution (quantiles), 
+providing a more comprehensive view of the relationship between variables than traditional mean-based cointegration tests.
 """)
