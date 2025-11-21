@@ -1,328 +1,232 @@
 """
-Streamlit app: panel MQCS(τ) quantile-cointegration test + linear cointegration check
-Author: you
-License: MIT
+Streamlit App: Panel MQCS Quantile Cointegration Test
+Based on Xiao (2009) methodology
 """
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-import statsmodels.api as sm
-from arch.bootstrap import CircularBlockBootstrap
+from mqcs_cointegration import panel_mqcs_test, MQCSTest, CRITICAL_VALUES
 
-st.set_page_config(page_title="Panel MQCS test", layout="wide")
-st.title("📊 Panel-data MQCS(τ) quantile-cointegration test")
+st.set_page_config(page_title="MQCS Quantile Cointegration", layout="wide")
 
-uploaded = st.file_uploader("Upload panel CSV or Excel", type=["csv","xlsx"])
-if uploaded is None: st.stop()
+st.title("📊 Panel MQCS Quantile Cointegration Test")
+st.markdown("""
+This app implements the **Modified Quantile Cointegration Statistic (MQCS)** test for panel data.
+The test examines cointegration relationships at different quantiles of the conditional distribution.
+""")
 
+# File upload
+uploaded = st.file_uploader("Upload panel CSV or Excel file", type=["csv", "xlsx"])
+
+if uploaded is None:
+    st.info("👆 Please upload your panel data file to begin")
+    st.markdown("""
+    **Expected data format:**
+    - Panel data with entity identifier (e.g., Country, ID)
+    - Time series for each entity
+    - At least one dependent variable (y)
+    - At least one independent variable (x)
+    """)
+    st.stop()
+
+# Load data
 @st.cache_data
-def read(f):
-    return pd.read_csv(f) if f.name.endswith(".csv") else pd.read_excel(f)
+def load_data(file):
+    if file.name.endswith('.csv'):
+        return pd.read_csv(file)
+    else:
+        return pd.read_excel(file)
 
-df_raw = read(uploaded)
-st.write("### 1. Raw data (first 5 rows)")
-st.dataframe(df_raw.head())
+df_raw = load_data(uploaded)
 
-id_col   = st.selectbox("Select panel-ID column (e.g., Country)", ["index"] + list(df_raw.columns))
-date_col = st.selectbox("Select date column (optional)", ["none"] + list(df_raw.columns))
-y_col    = st.selectbox("Dependent variable (y)", df_raw.columns)
-x_cols   = st.multiselect("Independent variables (x)", df_raw.columns,
-                            default=[c for c in df_raw.columns if c not in {y_col, id_col, date_col}])
-if not x_cols: st.warning("Choose at least one x variable."); st.stop()
+st.write("### 📁 Raw Data Preview")
+st.dataframe(df_raw.head(10))
+st.write(f"**Shape:** {df_raw.shape[0]} rows × {df_raw.shape[1]} columns")
 
-# ========== TRANSFORMATION OPTIONS ==========
-st.write("### 🔧 Transformation Settings")
-col1, col2 = st.columns(2)
+# Column selection
+st.write("### ⚙️ Configure Analysis")
+
+col1, col2, col3 = st.columns(3)
+
 with col1:
-    transform_method = st.selectbox(
-        "Transformation method",
-        ["Log with min-shift (entity-specific)", 
-         "IHS - Inverse Hyperbolic Sine",
-         "Log only (fails if negative)",
-         "No transformation (use raw data)"],
-        help="Entity-specific means each country/entity is transformed separately"
-    )
+    id_col = st.selectbox("Entity ID Column (e.g., Country)", df_raw.columns)
+
 with col2:
-    normalize = st.checkbox("Apply z-score normalization (within entity)", value=True,
-                           help="Standardize each entity's series to mean=0, std=1")
+    y_col = st.selectbox("Dependent Variable (y)", 
+                         [c for c in df_raw.columns if c != id_col])
 
-# ----------  tidy panel  -----------------------------------------------------
-if id_col == "index":
-    wide = df_raw.copy()
-    wide['__entity__'] = wide.index
-    entity_col = '__entity__'
+with col3:
+    x_col = st.selectbox("Independent Variable (x)", 
+                         [c for c in df_raw.columns if c not in [id_col, y_col]])
+
+# Transformation settings
+st.write("### 🔧 Transformation Settings")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    transform = st.selectbox(
+        "Transformation Method",
+        ["log_shift", "ihs", "log", "none"],
+        help="""
+        - log_shift: Min-shift then log (handles negatives)
+        - ihs: Inverse Hyperbolic Sine (handles negatives)
+        - log: Natural log (requires positive values)
+        - none: No transformation
+        """
+    )
+
+with col2:
+    normalize = st.checkbox("Z-score normalization (within entity)", value=True,
+                           help="Standardize each entity to mean=0, std=1")
+
+with col3:
+    B = st.number_input("Bootstrap replications", min_value=100, max_value=5000, 
+                       value=1000, step=100,
+                       help="More replications = more accurate p-values but slower")
+
+# Quantile selection
+st.write("### 📈 Quantile Selection")
+use_preset = st.radio("Quantile selection:", ["Preset quantiles", "Custom quantiles"])
+
+if use_preset == "Preset quantiles":
+    quantile_option = st.selectbox(
+        "Select preset",
+        ["Standard (0.1, 0.3, 0.5, 0.7, 0.9)",
+         "Fine (0.1 to 0.9 by 0.1)",
+         "Tails focus (0.05, 0.1, 0.25, 0.75, 0.9, 0.95)"]
+    )
+    
+    if quantile_option.startswith("Standard"):
+        quantiles = [0.1, 0.3, 0.5, 0.7, 0.9]
+    elif quantile_option.startswith("Fine"):
+        quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    else:
+        quantiles = [0.05, 0.1, 0.25, 0.75, 0.9, 0.95]
 else:
-    entity_col = id_col
-    idx = [id_col] if date_col=="none" else [id_col, date_col]
-    wide = df_raw.set_index(idx).reset_index()
-
-panel = wide[[entity_col] + [y_col] + x_cols].dropna()
-
-st.write(f"**Data check**: {panel[entity_col].nunique()} entities, {len(panel)} total observations")
-
-# ========== ENTITY-SPECIFIC TRANSFORMATION ==========
-def transform_series(series, method, entity_name, var_name):
-    """Apply transformation to a single series with diagnostics"""
-    original_series = series.copy()
-    
-    if method == "Log with min-shift (entity-specific)":
-        min_val = series.min()
-        if min_val <= 0:
-            shift = abs(min_val) + 1
-            series = series + shift
-            st.info(f"🔄 {entity_name} | {var_name}: shifted by +{shift:.2f} (min was {min_val:.2f})")
-        series = np.log(series)
-        
-    elif method == "IHS - Inverse Hyperbolic Sine":
-        # arcsinh(x) = log(x + sqrt(x^2 + 1))
-        series = np.arcsinh(series)
-        
-    elif method == "Log only (fails if negative)":
-        if (series <= 0).any():
-            raise ValueError(f"{entity_name} | {var_name}: has non-positive values. Use min-shift or IHS.")
-        series = np.log(series)
-        
-    # else: No transformation
-    
-    return series
-
-# Apply transformation entity by entity
-transformed_data = []
-transformation_log = []
-
-for entity, entity_df in panel.groupby(entity_col):
-    entity_transformed = entity_df[[entity_col]].copy()
-    
-    # Transform each variable
-    for var in [y_col] + x_cols:
-        try:
-            entity_transformed[var] = transform_series(
-                entity_df[var].values, 
-                transform_method,
-                entity,
-                var
-            )
-        except Exception as e:
-            st.error(f"❌ {entity} | {var}: {str(e)}")
+    quantile_input = st.text_input("Enter quantiles (comma-separated)", "0.1, 0.3, 0.5, 0.7, 0.9")
+    try:
+        quantiles = [float(q.strip()) for q in quantile_input.split(",")]
+        if not all(0 < q < 1 for q in quantiles):
+            st.error("All quantiles must be between 0 and 1")
             st.stop()
+    except:
+        st.error("Invalid quantile format. Use comma-separated decimals (e.g., 0.1, 0.5, 0.9)")
+        st.stop()
+
+st.write(f"**Testing at quantiles:** {quantiles}")
+
+# Run test button
+if st.button("🚀 Run MQCS Test", type="primary"):
     
-    # Check for inf/nan after transformation
-    if entity_transformed[[y_col] + x_cols].isin([np.inf, -np.inf]).any().any():
-        inf_cols = [col for col in [y_col] + x_cols if entity_transformed[col].isin([np.inf, -np.inf]).any()]
-        transformation_log.append(f"⚠️ {entity}: inf in {inf_cols}")
-        st.warning(f"⚠️ {entity}: inf values in {inf_cols} after transformation - SKIPPING")
-        continue
-    
-    if entity_transformed[[y_col] + x_cols].isna().any().any():
-        nan_cols = [col for col in [y_col] + x_cols if entity_transformed[col].isna().any()]
-        transformation_log.append(f"⚠️ {entity}: NaN in {nan_cols}")
-        st.warning(f"⚠️ {entity}: NaN values in {nan_cols} after transformation - SKIPPING")
-        continue
-    
-    # Z-score normalization (within entity)
-    if normalize:
-        for var in [y_col] + x_cols:
-            mean_val = entity_transformed[var].mean()
-            std_val = entity_transformed[var].std()
+    with st.spinner("Running MQCS test... This may take a few minutes..."):
+        
+        try:
+            # Prepare data
+            df_test = df_raw[[id_col, y_col, x_col]].dropna()
             
-            if std_val == 0 or not np.isfinite(std_val):
-                st.error(f"❌ {entity} | {var}: zero or invalid std (constant values)")
+            st.write(f"**Entities:** {df_test[id_col].nunique()}")
+            st.write(f"**Total observations:** {len(df_test)}")
+            
+            # Run test
+            results = panel_mqcs_test(
+                df_test,
+                id_col=id_col,
+                y_col=y_col,
+                x_col=x_col,
+                quantiles=quantiles,
+                B=B,
+                transform=transform,
+                normalize=normalize
+            )
+            
+            if len(results) == 0:
+                st.error("❌ No valid results. Check warnings above.")
                 st.stop()
             
-            entity_transformed[var] = (entity_transformed[var] - mean_val) / std_val
-    
-    transformed_data.append(entity_transformed)
-
-panel_transformed = pd.concat(transformed_data, ignore_index=True)
-
-st.write(f"✅ Successfully transformed {len(transformed_data)} out of {panel[entity_col].nunique()} entities")
-
-if len(transformed_data) == 0:
-    st.error("❌ No entities successfully transformed. Check transformation logs above.")
-    st.stop()
-
-# Prepare for visualization
-if date_col != "none":
-    # Add date back for better chart
-    panel_transformed = panel_transformed.merge(
-        panel[[entity_col, date_col]], 
-        left_index=True, 
-        right_index=True, 
-        how='left'
-    )
-
-st.write("### 2. Transformed series")
-st.write(f"**Method**: {transform_method}")
-st.write(f"**Normalized**: {'Yes (z-score within entity)' if normalize else 'No'}")
-
-chart_ready = panel_transformed.select_dtypes(include=np.number)
-st.line_chart(chart_ready[[y_col] + x_cols])
-
-# Show summary statistics
-with st.expander("📊 Summary statistics (post-transformation)"):
-    st.dataframe(panel_transformed.groupby(entity_col)[[y_col] + x_cols].describe().T)
-
-# ----------  core functions  -------------------------------------------------
-def _mqcs(y, x, tau, h=None, B=500, block_size=None, seed=42):
-    """MQCS test with data validation"""
-    if len(y) != len(x):
-        raise ValueError(f"Length mismatch: y={len(y)}, x={len(x)}")
-    
-    if np.any(~np.isfinite(y)) or np.any(~np.isfinite(x)):
-        raise ValueError("Input contains inf or NaN values")
-    
-    n = len(y)
-    if n < 10:
-        raise ValueError(f"Insufficient data: n={n}")
-    
-    h = int(n**(1/5)) if h is None else h
-    block_size = int(n**(1/3)) if block_size is None else block_size
-    
-    X = sm.add_constant(x.reshape(-1,1))
-    
-    if np.linalg.matrix_rank(X) < X.shape[1]:
-        raise ValueError("Perfect multicollinearity detected in X")
-    
-    mod = sm.QuantReg(y, X)
-    beta = mod.fit(q=tau).params
-    u = y - X @ beta
-    psi = tau - (u < 0)
-    
-    # Newey-West long-run variance
-    gamma = sm.tsa.stattools.acf(psi, nlags=h, fft=False)
-    lrv   = gamma[0] + 2 * gamma[1:].sum()
-    
-    if lrv <= 0:
-        lrv = 1e-8
-    
-    S = np.cumsum(psi)/np.sqrt(n)/np.sqrt(lrv)
-    stat = np.max(np.abs(S))
-    
-    # Bootstrap
-    rng = np.random.default_rng(seed)
-    bs_stats = []
-    cbb = CircularBlockBootstrap(block_size, x, y, random_state=rng)
-    
-    for _, bx, by in cbb.bootstrap(B):
-        try:
-            bX = sm.add_constant(bx.reshape(-1,1))
-            bmod = sm.QuantReg(by, bX).fit(q=tau)
-            bu = by - bX @ bmod.params
-            bpsi = tau - (bu < 0)
-            bgamma = sm.tsa.stattools.acf(bpsi, nlags=h, fft=False)
-            blrv   = bgamma[0] + 2 * bgamma[1:].sum()
+            # Display results
+            st.write("## 📊 Results")
+            st.success(f"✅ Successfully tested {len(results)} entities")
             
-            if blrv <= 0:
-                blrv = 1e-8
+            # Prepare display table (without p-values for cleaner view)
+            display_cols = ['Entity', 'N'] + [col for col in results.columns if not col.endswith('_pval') and col not in ['Entity', 'N']]
+            display_df = results[display_cols].copy()
             
-            bS = np.cumsum(bpsi)/np.sqrt(len(bpsi))/np.sqrt(blrv)
-            bs_stats.append(np.max(np.abs(bS)))
-        except:
-            continue
-    
-    if len(bs_stats) == 0:
-        return stat, np.nan
-    
-    pval = 1 - np.mean(np.array(bs_stats) <= stat)
-    return stat, pval
-
-def _eg_adf(y, x):
-    """Engle-Granger ADF test"""
-    resid = sm.OLS(y, sm.add_constant(x.reshape(-1,1))).fit().resid
-    return sm.tsa.adfuller(resid, regression='ct', autolag='AIC')[0]
-
-# ----------  run tests  ------------------------------------------------------
-st.write("### 3. Running tests...")
-progress_bar = st.progress(0)
-taus = [0.1, 0.3, 0.5, 0.7, 0.9]
-results = []
-errors = []
-
-entities = panel_transformed[entity_col].unique()
-for idx, entity in enumerate(entities):
-    try:
-        sub = panel_transformed[panel_transformed[entity_col] == entity]
-        y = sub[y_col].values
-        x1 = sub[x_cols[0]].values
-        
-        # Detailed validation
-        if len(y) < 10:
-            errors.append(f"❌ {entity}: insufficient data (n={len(y)}, need ≥10)")
-            continue
-        
-        # Check for NaN
-        if np.any(np.isnan(y)):
-            errors.append(f"❌ {entity}: y contains NaN (count={np.sum(np.isnan(y))})")
-            continue
-        if np.any(np.isnan(x1)):
-            errors.append(f"❌ {entity}: x contains NaN (count={np.sum(np.isnan(x1))})")
-            continue
+            st.dataframe(display_df, use_container_width=True)
             
-        # Check for inf
-        if np.any(np.isinf(y)):
-            errors.append(f"❌ {entity}: y contains inf (count={np.sum(np.isinf(y))})")
-            continue
-        if np.any(np.isinf(x1)):
-            errors.append(f"❌ {entity}: x contains inf (count={np.sum(np.isinf(x1))})")
-            continue
-        
-        # Check for zero variance
-        if np.std(y) == 0:
-            errors.append(f"❌ {entity}: y has zero variance (constant)")
-            continue
-        if np.std(x1) == 0:
-            errors.append(f"❌ {entity}: x has zero variance (constant)")
-            continue
-        
-        row = {'ID': entity, 'N': len(y)}
-        
-        for tau in taus:
-            stat, pval = _mqcs(y, x1, tau)
-            if np.isnan(pval):
-                row[f'τ={tau}'] = "N/A"
-            else:
-                stars = ''.join(['*' for t in [0.1,0.05,0.01] if pval < t])
-                row[f'τ={tau}'] = f"{stat:.3f}{stars} (p={pval:.3f})"
-        
-        row['ADF-t'] = f"{_eg_adf(y, x1):.3f}"
-        results.append(row)
-        
-    except Exception as e:
-        errors.append(f"ID {entity}: {str(e)}")
-    
-    progress_bar.progress((idx + 1) / len(entities))
+            # Interpretation guide
+            st.write("### 📖 Interpretation Guide")
+            st.markdown(f"""
+            **Test Statistic Interpretation:**
+            - Larger values indicate **rejection** of the null hypothesis (no cointegration)
+            - Stars indicate significance: *** p<0.01, ** p<0.05, * p<0.10
+            
+            **Critical Values (Xiao & Phillips 2002):**
+            - 10% level: {CRITICAL_VALUES[0.10]}
+            - 5% level: {CRITICAL_VALUES[0.05]}
+            - 1% level: {CRITICAL_VALUES[0.01]}
+            
+            **Note:** P-values are computed via {B} bootstrap replications.
+            Bootstrap accounts for finite-sample properties and serial correlation.
+            """)
+            
+            # Full results with p-values
+            with st.expander("📋 Full Results (including p-values)"):
+                st.dataframe(results, use_container_width=True)
+            
+            # Download buttons
+            st.write("### 💾 Download Results")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                csv = display_df.to_csv(index=False)
+                st.download_button(
+                    "📥 Download Results (CSV)",
+                    csv,
+                    "mqcs_results.csv",
+                    "text/csv"
+                )
+            
+            with col2:
+                csv_full = results.to_csv(index=False)
+                st.download_button(
+                    "📥 Download Full Results with P-values (CSV)",
+                    csv_full,
+                    "mqcs_results_full.csv",
+                    "text/csv"
+                )
+            
+            # Summary statistics
+            st.write("### 📈 Summary Statistics")
+            
+            # Count significant results
+            sig_counts = {}
+            for tau in quantiles:
+                col_name = f'τ={tau:.1f}_pval'
+                if col_name in results.columns:
+                    sig_counts[f'τ={tau:.1f}'] = {
+                        '1%': (results[col_name] < 0.01).sum(),
+                        '5%': (results[col_name] < 0.05).sum(),
+                        '10%': (results[col_name] < 0.10).sum()
+                    }
+            
+            sig_df = pd.DataFrame(sig_counts).T
+            sig_df.columns = ['Sig at 1%', 'Sig at 5%', 'Sig at 10%']
+            
+            st.write("**Number of entities with significant cointegration:**")
+            st.dataframe(sig_df)
+            
+        except Exception as e:
+            st.error(f"❌ Error during analysis: {str(e)}")
+            st.exception(e)
 
-progress_bar.empty()
-
-if errors:
-    st.error(f"⚠️ {len(errors)} errors occurred during processing:")
-    for err in errors:
-        st.error(err)
-
-if not results:
-    st.error("❌ No valid results. Please check your data and errors above.")
-    st.write("**Debug Info:**")
-    st.write(f"- Total entities in data: {len(entities)}")
-    st.write(f"- Entities processed: {len(results)}")
-    st.write(f"- Errors encountered: {len(errors)}")
-    st.write("\n**Transformed data sample:**")
-    st.dataframe(panel_transformed.head(20))
-    st.stop()
-
-out = pd.DataFrame(results).set_index('ID')
-st.write("### 4. Panel MQCS Results")
-st.dataframe(out, use_container_width=True)
-
-csv = out.to_csv()
-st.download_button("📥 Download Results CSV", csv, "panel_mqcs_results.csv", "text/csv")
-
-st.info(
-    "**Interpretation Guide**  \n"
-    "- **MQCS(τ)**: Quantile cointegration test statistic at quantile τ  \n"
-    "- **Stars**: *** p<0.01, ** p<0.05, * p<0.10 (reject H₀: no cointegration)  \n"
-    "- **ADF-t**: Engle-Granger residual ADF t-statistic (more negative = stronger cointegration)  \n"
-    "- Each entity tested separately with entity-specific transformation  \n"
-    "- Bootstrap iterations: 500 with circular block bootstrap"
-)
-
-st.success("✅ Analysis complete!")
+# Footer
+st.write("---")
+st.markdown("""
+**Reference:**
+- Xiao, Z. (2009). "Quantile Cointegrating Regression." *Journal of Econometrics*.
+- Test implements moving block bootstrap for p-value computation
+- Entity-specific transformation ensures valid panel cointegration tests
+""")
